@@ -195,39 +195,73 @@ def latest_twitter_search(sess: requests.Session,
    # print(response.text)
     return data
 
-
-def main(ct0:str,auth_token:str,query:str):
+def extract_and_save_tweets(sess, query, out_path):
     """
-    Main function to create a Twitter session and perform a search.
+    1) Fetch all pages of tweets for `query`
+    2) Extract name, username, timestamp, caption, profile_pic, media_urls
+    3) Save list of dicts to `out_path`
     """
-    # Create a Twitter session
-    sess = create_twitter_session(ct0, auth_token)
+    # — fetch first page & accumulate —
+    data = latest_twitter_search(sess, query)
+    tweets, cursor = parse_tweets_and_cursor(data)
+    all_tweets = tweets.copy()
 
-    # Perform the search
-    results = latest_twitter_search(sess, query)
+    # — page until no more cursors —
+    while cursor:
+        data = latest_twitter_search(sess, query, _cursor=cursor)
+        tweets, cursor = parse_tweets_and_cursor(data)
+        all_tweets.extend(tweets)
 
-    # Print the results
-    print(json.dumps(results, indent=4))
-    return results
+    # — pull out only the bits you care about —
+    simplified = []
+    for tw in all_tweets:
+        # user info lives under core → user_results → result → legacy
+        user = (
+            tw.get("core", {})
+              .get("user_results", {})
+              .get("result", {})
+              .get("legacy", {})
+        )
+        legacy = tw.get("legacy", {})  # tweet text + metadata
 
-# def extract_cursor(js: dict) -> str | None:
-#     for instr in js['data']['search_by_raw_query']['timeline']['instructions']:
-#         if 'addEntries' in instr:
-#             for entry in instr['addEntries']['entries']:
-#                 content = entry.get('content', {})
-#                 if content.get('cursorType') == 'Bottom':
-#                     return content.get('value')
-#     return None
+        # basic fields
+        name        = user.get("name")
+        username    = user.get("screen_name")
+        timestamp   = legacy.get("created_at")
+        caption     = legacy.get("full_text") or legacy.get("text")
+        profile_pic = user.get("profile_image_url_https")
 
-# usage
+        # media URLs (if any)
+        media_entities = legacy.get("extended_entities", {}) \
+                               .get("media", [])
+        media_urls = [
+            m.get("media_url_https") or m.get("media_url")
+            for m in media_entities
+        ]
+
+        simplified.append({
+            "name":            name,
+            "username":        username,
+            "timestamp":       timestamp,
+            "caption":         caption,
+            "profile_pic_url": profile_pic,
+            "media_urls":      media_urls,
+        })
+
+    # — write to disk —
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(simplified, f, ensure_ascii=False, indent=2)
+    logger.info(f"Wrote extracted tweets to {out_path}")
 
 
 if __name__ == "__main__":
-    main(
+    sess = create_twitter_session(
         ct0="d27c9d7aee37e26071909b8b7e5dd6962789bd7f488c2903fd19a3fc94fa0a19c0a66b245a65795eda7198f3f3d136ee42fa017a6a4e6b346defa7331646d3b5b94253c6fbcc5ab2f7bc2147f6620055",
         auth_token="42321ec745cdf546151c328931a31773b01afe0d",
-        query="ronaldo"
     )
-    # js = response.json()
-    # next_cursor = extract_cursor(js)
-    
+    # replace with your desired filename
+    extract_and_save_tweets(
+        sess,
+        query="ronaldo",
+        out_path="C:\\Users\\user\\Documents\\tweets_extracted.json"
+    )
